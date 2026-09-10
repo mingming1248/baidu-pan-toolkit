@@ -29,6 +29,20 @@
 
 ---
 
+## 实战验证
+
+本方法论已在真实账号上完整跑通（所有删除均进回收站，10 天恢复期）：
+
+| 工程 | 规模 | 结果 |
+|---|---|---|
+| 百度网盘去重 | 单账号 3.06 万文件 / 1.93TB | 删除 1,950 个重复文件，释放 24.09GB，终验账目分毫不差 |
+| 天翼云盘 189 去重 | 单账号 23.8 万文件 / 1.62TB | 三批删除 13.7 万文件 / 844GB 全程零失败，终验 0 重复、0 空文件夹 |
+| 百度网盘跨账号合并 | 源账号 221GB / 5,115 条目 | 79 个迁移单元全部转存，4,754 文件大小零差异，源账号注销成功 |
+
+> 三个工程均无 VIP、无账号密码交互、无第三方工具；完整过程复盘已沉淀为上方三个 Skill，可直接复用。
+
+---
+
 ## 为什么不用官方客户端 / 第三方工具？
 
 | 痛点 | 本方案 |
@@ -214,14 +228,6 @@ node scripts\verify_account_deleted.js 9223
 
 ---
 
-## 实战报告（reports/）
-
-`reports/cloud189-cleanup-report/` 存放天翼云盘清理工程的完整过程报告（HTML，可离线打开）：
-
-- `cloud189-cleanup-report.html` — 进行中总结（扫描 238,418 文件 / 识别重复 830GB / 方案分层）
-- `cloud189-final-report.html` — 方案一完成报告（116,686 文件 / 732GB 删除，抽查 24/24 通过）
-- `cloud189-complete-report.html` — 终极收尾报告（三批共 137,152 文件 / 844GB，终验 0 重复 0 空文件夹）
-
 ## 安全说明
 
 - 所有操作复用用户**已登录**的浏览器会话，无任何账号密码 / token / cookie 交互
@@ -232,23 +238,18 @@ node scripts\verify_account_deleted.js 9223
 ## 目录结构
 
 ```
-baidu-pan-toolkit/
+netdisk-toolkit/
 ├── README.md
+├── LICENSE
 ├── baidu-netdisk-dedup/          # 百度网盘去重（MD5 内容级）
 │   ├── SKILL.md
 │   └── scripts/                  # 扫描 / 分析 / 删除 / 验证 / 抓包
 ├── cloud189-netdisk-dedup/       # 天翼云盘 189 去重（Skill 名：网盘去重）
 │   ├── SKILL.md
 │   └── scripts/                  # 扫描 / 分析 / 删除 / 空文件夹清理
-├── baidu-netdisk-merge/          # 百度网盘跨账号合并
-│   ├── SKILL.md
-│   └── scripts/                  # 枚举 / 切分 / 分享 / 转存 / 验证 / 删除 / 注销验证
-└── reports/
-    └── cloud189-cleanup-report/  # 天翼云盘清理工程实战报告（HTML）
-        ├── cloud189-cleanup-report.html
-        ├── cloud189-final-report.html
-        ├── cloud189-complete-report.html
-        └── assets/               # 图表脚本
+└── baidu-netdisk-merge/          # 百度网盘跨账号合并
+    ├── SKILL.md
+    └── scripts/                  # 枚举 / 切分 / 分享 / 转存 / 验证 / 删除 / 注销验证
 ```
 
 ## License
