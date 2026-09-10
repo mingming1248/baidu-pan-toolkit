@@ -1,11 +1,31 @@
-# 百度网盘工具箱（Baidu Netdisk Toolkit）
+# 网盘去重工具箱（Netdisk Toolkit）
 
-无 VIP、不开客户端、不依赖任何第三方 API 密钥的百度网盘网页版自动化工具集。基于 **CDP（Chrome DevTools Protocol）** 桥接已登录的浏览器会话，在页面内直接调用百度官方 Web API，完成两大任务：
+无 VIP、不开客户端、不依赖任何第三方 API 密钥的**网盘网页版自动化工具集**。基于 **CDP（Chrome DevTools Protocol）** 桥接已登录的浏览器会话，在页面内直接调用官方 Web API，完成网盘清理与迁移任务。
 
-1. **`baidu-netdisk-dedup`** — 单账号内 MD5 内容级去重清理
-2. **`baidu-netdisk-merge`** — 跨账号整盘迁移合并（分享 → 转存 → 源端清理 → 注销验证）
+## 核心思想：网盘去重（通用方法论）
 
-> 两个 skill 目的与方法完全不同：dedup 是"账号内找重删重"，merge 是"账号间全量搬家"。请按场景选用。
+> **这种思路不限于本仓库已实现的百度网盘、天翼云盘（189）——夸克网盘、阿里云盘、139 网盘，以及任何提供 Web API 的网盘，都可以用同一套方法做重复文件清理。**
+
+通用范式只有四步：
+
+1. **复用登录态**：用 CDP 把已登录的浏览器标签页桥接出来，页面内 fetch 官方接口自动携带 Cookie / 会话凭证，无需账号密码、无需抓包逆向
+2. **枚举 + 内容指纹**：递归调用官方列表接口，拿全盘文件清单和 **MD5 内容指纹**（服务端直接返回，与文件名无关，零误判）
+3. **按 `md5:size` 判重**：内容一致的才算重复，每组保留 1 个最优副本，其余生成删除计划
+4. **受控批量删除**：调用官方批量任务 / 删除接口，串行 + 低频 + 断点续删，删除进回收站兜底
+
+任何网盘要接入，只需改三个参数：**列表接口、批量删除接口、会话凭证的获取方式**（本仓库的 `baidu-netdisk-dedup` 与 `cloud189-netdisk-dedup` 就是同一方法论在不同网盘上的两个落地实例）。
+
+---
+
+## 本仓库包含的 Skill
+
+| Skill | 网盘 | 用途 | 实测成绩 |
+|---|---|---|---|
+| [`baidu-netdisk-dedup`](./baidu-netdisk-dedup/SKILL.md) | 百度网盘 | 单账号内 MD5 去重 | 3.06 万文件 / 1.93TB 扫描 11 分钟；删 1,950 重复释放 24.09GB |
+| [`cloud189-netdisk-dedup`](./cloud189-netdisk-dedup/SKILL.md)（网盘去重） | 天翼云盘 189 | 单账号内 MD5 去重 + 空文件夹清理 | 23.8 万文件 / 1.62TB 扫描 10 分钟；删 13.7 万文件释放 844GB，终验 0 重复 |
+| [`baidu-netdisk-merge`](./baidu-netdisk-merge/SKILL.md) | 百度网盘 | 跨账号整盘迁移合并（注销前搬家） | 221GB / 4,754 文件零差异，源端清理全成功 |
+
+> dedup（去重）与 merge（合并）目的与方法完全不同：dedup 是"账号内找重删重"，merge 是"账号间全量搬家"。请按场景选用。
 
 ---
 
@@ -22,11 +42,11 @@
 
 - Windows（脚本含 `.bat` 启动器；核心逻辑为 Node.js 脚本，可在 macOS/Linux 运行）
 - Node.js ≥ 18（原生 `WebSocket` / `fetch`）
-- Edge 或 Chrome 浏览器（以远程调试端口启动，独立 profile 登录百度网盘）
+- Edge 或 Chrome 浏览器（以远程调试端口启动，独立 profile 登录网盘）
 
 ---
 
-## 1. baidu-netdisk-dedup — 重复文件清理
+## 1. baidu-netdisk-dedup — 百度网盘重复文件清理
 
 [`baidu-netdisk-dedup/`](./baidu-netdisk-dedup/SKILL.md)
 
@@ -70,7 +90,58 @@ node scripts\del_driver.js
 
 ---
 
-## 2. baidu-netdisk-merge — 跨账号合并
+## 2. cloud189-netdisk-dedup — 天翼云盘（189）重复文件清理
+
+[`cloud189-netdisk-dedup/`](./cloud189-netdisk-dedup/SKILL.md)　·　Skill 名：**网盘去重**
+
+### 能力
+
+- **全盘扫描**：`listFiles.action` 返回 XML，递归枚举全部文件/文件夹，含 **MD5 + 大小**
+- **去重分析**：按 `md5:size` 分组 + 四类分层（A 同文件夹时戳副本 / C 时戳文件夹 / B1 整树镜像 / B2 零散重复）
+- **批量删除**：`createBatchTask.action` 批量任务 + `checkBatchTask` 轮询，单账号串行、批次自适应 200→400、断点续删
+- **空文件夹清理**：只删"因清理而变空"的空壳目录，最大层级递归删除
+- **WAF 对抗**：写操作走浏览器桥接复用挑战 Cookie；请求体文件名替换为通用名规避内容规则拦截（服务端按 fileId 定位，结果准确）
+
+### 实测成绩
+
+- 单账号 23.8 万文件 / 1.62TB 全盘扫描约 10 分钟
+- 13.7 万文件 / 844GB 分三批删除，全程零失败
+- 终验重扫：101,280 文件 **0 组真实重复、0 个空文件夹**，账目分毫不差
+
+### 快速开始
+
+```bat
+:: 1. 启动调试浏览器并登录 cloud.189.cn
+scripts\launch_edge_debug.bat
+
+:: 2. 全盘扫描（含 MD5）
+node scripts\scan_md5.js
+
+:: 3. 去重分析，生成删除计划 deletions.json
+node scripts\analyze_dup.js
+
+:: 4. 确认计划后批量删除（先小批量试运行）
+node scripts\del_driver.js 200
+node scripts\del_driver.js
+
+:: 5. 清理空文件夹（三步）
+node scripts\del_empty_folders.js plan
+node scripts\del_empty_folders.js run
+node scripts\del_empty_folders.js verify
+
+:: 6. 终验：在新目录重跑 scan_md5.js + analyze_dup.js，核对账目
+```
+
+### 关键坑位（已验证）
+
+- **单账号同一时间只允许一个批量任务**：并发提交会导致约 20% 批次整批失败，必须单进程串行（吞吐反而更高）
+- 写操作必须经浏览器页面内 fetch（CDP 桥接），Node 直连被 WAF 指纹拦截 403
+- 请求体中的 `fileName` 必须替换为通用名（`f0.tmp`）——WAF 内容规则会拦截含系统文件名的请求体
+- 后台标签页会被浏览器冻结：每次请求前先 `setWebLifecycleState('active')` + `bringToFront` 唤醒
+
+---
+
+## 3. baidu-netdisk-merge — 跨账号合并
 
 [`baidu-netdisk-merge/`](./baidu-netdisk-merge/SKILL.md)
 
@@ -143,42 +214,41 @@ node scripts\verify_account_deleted.js 9223
 
 ---
 
+## 实战报告（reports/）
+
+`reports/cloud189-cleanup-report/` 存放天翼云盘清理工程的完整过程报告（HTML，可离线打开）：
+
+- `cloud189-cleanup-report.html` — 进行中总结（扫描 238,418 文件 / 识别重复 830GB / 方案分层）
+- `cloud189-final-report.html` — 方案一完成报告（116,686 文件 / 732GB 删除，抽查 24/24 通过）
+- `cloud189-complete-report.html` — 终极收尾报告（三批共 137,152 文件 / 844GB，终验 0 重复 0 空文件夹）
+
 ## 安全说明
 
 - 所有操作复用用户**已登录**的浏览器会话，无任何账号密码 / token / cookie 交互
 - 删除全部进回收站（10 天恢复期）
-- 脚本默认**不硬编码任何账号信息**：端口、源账号 UK 等均为运行时参数
-- 仅供个人网盘管理使用，请遵守百度网盘服务条款，勿用于违规内容操作
+- 脚本默认**不硬编码任何账号信息**：端口、账号 UK 等均为运行时参数
+- 仅供个人网盘管理使用，请遵守各网盘服务条款，勿用于违规内容操作
 
 ## 目录结构
 
 ```
 baidu-pan-toolkit/
 ├── README.md
-├── baidu-netdisk-dedup/
-│   ├── SKILL.md              # 去重方法论（完整文档）
-│   └── scripts/
-│       ├── launch_edge_debug.bat
-│       ├── scan_md5.js       # 全盘扫描（含 MD5）
-│       ├── analyze_dup.js    # 去重分析与删除计划
-│       ├── del_driver.js     # 批量删除驱动（断点续删）
-│       ├── verify_del.js     # 单文件删除验证
-│       └── net_capture.js    # 前端请求抓包对比
-└── baidu-netdisk-merge/
-    ├── SKILL.md              # 跨账号合并方法论（完整文档）
-    └── scripts/
-        ├── cdp_common.js     # CDP 连接工具库
-        ├── launch_edge_debug.bat
-        ├── scan_account.js   # 源账号全盘枚举
-        ├── plan_units.js     # 迁移单元切分（≤500 文件）
-        ├── share_create.js   # 创建分享
-        ├── transfer_all.js   # 批量转存
-        ├── retry_transfer.js # 转存失败重试
-        ├── verify_migration.js  # 完整性验证
-        ├── delete_migrated.js   # 源端删除已转存
-        ├── del_empty_dirs.js    # 补删空目录
-        ├── verify_account.js    # 登录态快速检查
-        └── verify_account_deleted.js  # 注销验证
+├── baidu-netdisk-dedup/          # 百度网盘去重（MD5 内容级）
+│   ├── SKILL.md
+│   └── scripts/                  # 扫描 / 分析 / 删除 / 验证 / 抓包
+├── cloud189-netdisk-dedup/       # 天翼云盘 189 去重（Skill 名：网盘去重）
+│   ├── SKILL.md
+│   └── scripts/                  # 扫描 / 分析 / 删除 / 空文件夹清理
+├── baidu-netdisk-merge/          # 百度网盘跨账号合并
+│   ├── SKILL.md
+│   └── scripts/                  # 枚举 / 切分 / 分享 / 转存 / 验证 / 删除 / 注销验证
+└── reports/
+    └── cloud189-cleanup-report/  # 天翼云盘清理工程实战报告（HTML）
+        ├── cloud189-cleanup-report.html
+        ├── cloud189-final-report.html
+        ├── cloud189-complete-report.html
+        └── assets/               # 图表脚本
 ```
 
 ## License
