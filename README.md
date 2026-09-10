@@ -4,16 +4,16 @@
 
 ## 核心思想：网盘去重（通用方法论）
 
-> **这种思路不限于本仓库已实现的百度网盘、天翼云盘（189）——夸克网盘、阿里云盘、139 网盘，以及任何提供 Web API 的网盘，都可以用同一套方法做重复文件清理。**
+> **这种思路不限于本仓库已实现的百度网盘、天翼云盘（189）、139 网盘——夸克网盘、阿里云盘，以及任何提供 Web API 的网盘，都可以用同一套方法做重复文件清理。**
 
 通用范式只有四步：
 
 1. **复用登录态**：用 CDP 把已登录的浏览器标签页桥接出来，页面内 fetch 官方接口自动携带 Cookie / 会话凭证，无需账号密码、无需抓包逆向
-2. **枚举 + 内容指纹**：递归调用官方列表接口，拿全盘文件清单和 **MD5 内容指纹**（服务端直接返回，与文件名无关，零误判）
-3. **按 `md5:size` 判重**：内容一致的才算重复，每组保留 1 个最优副本，其余生成删除计划
+2. **枚举 + 内容指纹**：递归调用官方列表接口，拿全盘文件清单和 **MD5 / 内容哈希指纹**（服务端直接返回，与文件名无关，零误判）
+3. **按指纹判重**：内容一致的才算重复，每组保留 1 个最优副本，其余生成删除计划
 4. **受控批量删除**：调用官方批量任务 / 删除接口，串行 + 低频 + 断点续删，删除进回收站兜底
 
-任何网盘要接入，只需改三个参数：**列表接口、批量删除接口、会话凭证的获取方式**（本仓库的 `baidu-netdisk-dedup` 与 `cloud189-netdisk-dedup` 就是同一方法论在不同网盘上的两个落地实例）。
+任何网盘要接入，只需改三个参数：**列表接口、批量删除接口、会话凭证的获取方式**（本仓库的 `baidu-netdisk-dedup`、`cloud189-netdisk-dedup` 与 `139-netdisk-cleanup` 就是同一方法论在不同网盘上的三个落地实例）。
 
 ---
 
@@ -23,6 +23,7 @@
 |---|---|---|---|
 | [`baidu-netdisk-dedup`](./baidu-netdisk-dedup/SKILL.md) | 百度网盘 | 单账号内 MD5 去重 | 3.06 万文件 / 1.93TB 扫描 11 分钟；删 1,950 重复释放 24.09GB |
 | [`cloud189-netdisk-dedup`](./cloud189-netdisk-dedup/SKILL.md)（网盘去重） | 天翼云盘 189 | 单账号内 MD5 去重 + 空文件夹清理 | 23.8 万文件 / 1.62TB 扫描 10 分钟；删 13.7 万文件释放 844GB，终验 0 重复 |
+| [`139-netdisk-cleanup`](./139-netdisk-cleanup/SKILL.md) | 139 网盘（中国移动云盘） | 单账号内内容指纹去重 + 指纹导出备份 | 全链路 API 实测通过：列表 / SHA-256 指纹 / 删除 / 清空；测试文件判重删除验证 |
 | [`baidu-netdisk-merge`](./baidu-netdisk-merge/SKILL.md) | 百度网盘 | 跨账号整盘迁移合并（注销前搬家） | 221GB / 4,754 文件零差异，源端清理全成功 |
 
 > dedup（去重）与 merge（合并）目的与方法完全不同：dedup 是"账号内找重删重"，merge 是"账号间全量搬家"。请按场景选用。
@@ -37,9 +38,10 @@
 |---|---|---|
 | 百度网盘去重 | 单账号 3.06 万文件 / 1.93TB | 删除 1,950 个重复文件，释放 24.09GB，终验账目分毫不差 |
 | 天翼云盘 189 去重 | 单账号 23.8 万文件 / 1.62TB | 三批删除 13.7 万文件 / 844GB 全程零失败，终验 0 重复、0 空文件夹 |
+| 139 网盘 API 验证 | 单账号 140G 空间（近空盘） | 列表 / SHA-256 内容指纹 / 批量删除 / 回收站清空全链路打通；2 个相同测试文件判重一致并成功删除 |
 | 百度网盘跨账号合并 | 源账号 221GB / 5,115 条目 | 79 个迁移单元全部转存，4,754 文件大小零差异，源账号注销成功 |
 
-> 三个工程均无 VIP、无账号密码交互、无第三方工具；完整过程复盘已沉淀为上方三个 Skill，可直接复用。
+> 四个工程均无 VIP、无账号密码交互、无第三方工具；完整过程复盘已沉淀为上方四个 Skill，可直接复用。
 
 ---
 
@@ -155,7 +157,51 @@ node scripts\del_empty_folders.js verify
 
 ---
 
-## 3. baidu-netdisk-merge — 跨账号合并
+## 3. 139-netdisk-cleanup — 139 网盘（中国移动云盘）重复文件清理
+
+[`139-netdisk-cleanup/`](./139-netdisk-cleanup/SKILL.md)
+
+### 能力
+
+- **全盘扫描 + 指纹导出**：`POST /hcy/file/list` 递归枚举全部文件，列表响应**直接返回 SHA-256 `contentHash`**——无需逐文件下载计算，比百度/189 更省流量，可直接导出文件清单 + 内容指纹备份到本地
+- **去重分析**：按 `contentHash` 分组（SHA-256 全等即重复），评分规则自动保留最优副本
+- **批量删除**：`/hcy/recyclebin/batchTrash`（移回收站）/ `/hcy/file/batchDelete`（彻底删）/ `/hcy/recyclebin/clear`（清空回收站），body 统一 `{fileIds:[...]}`，断点续删
+- **认证**：`Authorization: Basic base64("pc:" + 手机号 + ":" + authToken)`，authToken 运行时从 `window.MCloudVM.$store.state.auth` 动态读取
+
+### 实测成绩
+
+- 认证 / 列表 / 分页 / 指纹 / 删除 / 清空全链路 API 实测通过（140G 空间账号）
+- 判重验证：上传 2 个相同文件 → contentHash 完全一致 → 删除其一 → 回收站清空，全程零失败
+- 当前实测账号为近空盘（16 目录 / 0 文件），大规模去重吞吐待真实数据账号验证
+
+### 快速开始
+
+```bat
+:: 1. 启动调试浏览器并登录 yun.139.com（注意：cloud.139.com 是云手机页，不是网盘）
+scripts\launch_edge_debug.bat
+
+:: 2. 全盘扫描（含 contentHash 指纹）→ 139_inventory.jsonl
+node scripts\139_scan.js
+
+:: 3. 去重分析，生成删除计划 deletions.json
+node scripts\139_analyze.js
+
+:: 4. 确认计划后批量删除（先小批量试运行；默认进回收站，--hard 彻底删）
+node scripts\139_del.js 100
+node scripts\139_del.js
+
+:: 5. 终验：在新目录重跑 139_scan.js + 139_analyze.js，核对账目
+```
+
+### 关键坑位（已验证）
+
+- 列表请求体字段是 **`parentFileId`**（不是 catalogId），根目录 ID 为 `"/"`；排序字段是 **`updated_at`/`name`/`size`**（下划线，不是 updateTime）
+- 认证是 **Basic 拼接**（`pc:手机号:authToken`），不是 Cookie 直带；authToken 会轮换，必须每次动态读取
+- 系统目录（手机图片/手机视频/同步/photo 等）经 file/list 返回空属正常，不要判为异常
+
+---
+
+## 4. baidu-netdisk-merge — 跨账号合并
 
 [`baidu-netdisk-merge/`](./baidu-netdisk-merge/SKILL.md)
 
@@ -247,6 +293,9 @@ netdisk-toolkit/
 ├── cloud189-netdisk-dedup/       # 天翼云盘 189 去重（Skill 名：网盘去重）
 │   ├── SKILL.md
 │   └── scripts/                  # 扫描 / 分析 / 删除 / 空文件夹清理
+├── 139-netdisk-cleanup/          # 139 网盘（中国移动云盘）去重（SHA-256 内容指纹）
+│   ├── SKILL.md
+│   └── scripts/                  # 扫描 / 分析 / 删除
 └── baidu-netdisk-merge/          # 百度网盘跨账号合并
     ├── SKILL.md
     └── scripts/                  # 枚举 / 切分 / 分享 / 转存 / 验证 / 删除 / 注销验证
